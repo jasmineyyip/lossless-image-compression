@@ -20,6 +20,7 @@ struct CDF {
 struct RangeEncoder {
     uint32_t low = 0;
     uint32_t high = 0xFFFFFFFF;
+    std::vector<uint8_t> output;
 
     void encode_symbol(uint32_t symbol_index, const CDF& model) {
         uint32_t cdf_low = model.table[symbol_index];
@@ -33,6 +34,16 @@ struct RangeEncoder {
 
         high = new_high;
         low  = new_low;
+
+        renormalize();
+    }
+
+    void renormalize() {
+        while ((low ^ high) >> 24 == 0) {
+            output.push_back(static_cast<uint8_t>(low >> 24));
+            low <<= 8;
+            high = (high << 8) | 0xFF;
+        }
     }
 };
 
