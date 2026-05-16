@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <vector>
 
+// cumulative distribution function
 struct CDF {
     std::vector<uint32_t> table;
     uint32_t total;
@@ -13,6 +14,25 @@ struct CDF {
             total += counts[i];
         }
         table[counts.size()] = total;
+    }
+};
+
+struct RangeEncoder {
+    uint32_t low = 0;
+    uint32_t high = 0xFFFFFFFF;
+
+    void encode_symbol(uint32_t symbol_index, const CDF& model) {
+        uint32_t cdf_low = model.table[symbol_index];
+        uint32_t cdf_high = model.table[symbol_index + 1];
+        uint32_t total = model.total;
+
+        uint64_t range = static_cast<uint64_t>(high - low) + 1;
+
+        uint32_t new_high = static_cast<uint32_t>(low + (range * cdf_high) / total - 1);
+        uint32_t new_low = static_cast<uint32_t>(low + (range * cdf_low) / total);
+
+        high = new_high;
+        low  = new_low;
     }
 };
 
