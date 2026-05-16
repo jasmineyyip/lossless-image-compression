@@ -21,6 +21,46 @@ struct RangeEncoder {
     uint32_t low = 0;
     uint32_t high = 0xFFFFFFFF;
     std::vector<uint8_t> output;
+    
+    uint32_t bit_buffer = 0;
+    int bits_in_buffer = 0;
+    uint32_t pending = 0;
+
+    void emit_bit(uint32_t bit) {
+        auto push = [&](uint32_t b) {
+            bit_buffer = (bit_buffer << 1) | (b & 1);
+            if (++bits_in_buffer == 8) {
+                output.push_back(bit_buffer);
+                bit_buffer = 0;
+                bits_in_buffer = 0;
+            }
+        };
+        push(bit);
+        for (uint32_t i = 0; i < pending; ++i) {
+            push(1 - bit);
+        }
+        pending = 0;
+    }
+
+    void renormalize() {
+        while (true) {
+            if (high < 0x80000000) {
+                emit_bit(0);
+            } else if (low >= 0x80000000) {
+                emit_bit(1);
+                low  -= 0x80000000;
+                high -= 0x80000000;
+            } else if (low >= 0x40000000 && high < 0xC0000000) {
+                pending++;
+                low  -= 0x40000000;
+                high -= 0x40000000;
+            } else {
+                break;
+            }
+            low <<= 1;
+            high = (high << 1) | 1;
+        }
+    }
 
     void encode_symbol(uint32_t symbol_index, const CDF& model) {
         uint32_t cdf_low = model.table[symbol_index];
@@ -36,14 +76,6 @@ struct RangeEncoder {
         low  = new_low;
 
         renormalize();
-    }
-
-    void renormalize() {
-        while ((low ^ high) >> 24 == 0) {
-            output.push_back(static_cast<uint8_t>(low >> 24));
-            low <<= 8;
-            high = (high << 8) | 0xFF;
-        }
     }
 };
 

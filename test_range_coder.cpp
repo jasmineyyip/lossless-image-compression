@@ -22,8 +22,9 @@ int main() {
               << "high  = 0x" << enc.high  << "\n";
 
     // test renormalization
-    for (int i = 0; i < 100; ++i) {
-        enc.encode_symbol(1, model);
+    for (int i = 0; i < 1000; ++i) {
+        uint32_t s = (i * 7) % 3;
+        enc.encode_symbol(s, model);
     }
-    std::cout << "output bytes: " << enc.output.size() << "\n";
+    std::cout << "output bytes: " << std::dec << enc.output.size() << "\n";
 }
