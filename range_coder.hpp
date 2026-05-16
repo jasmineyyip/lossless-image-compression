@@ -77,6 +77,18 @@ struct RangeEncoder {
 
         renormalize();
     }
+
+    void finalize() {
+        pending++;
+        if (low < 0x40000000) {
+            emit_bit(0);
+        } else {
+            emit_bit(1);
+        }
+        while (bits_in_buffer != 0) {
+            emit_bit(0);
+        }
+    }
 };
 
 CDF build_model(const std::vector<long>& histogram) {

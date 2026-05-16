@@ -27,4 +27,8 @@ int main() {
         enc.encode_symbol(s, model);
     }
     std::cout << "output bytes: " << std::dec << enc.output.size() << "\n";
+    
+    // test finalize
+    enc.finalize();
+    std::cout << "output bytes: " << std::dec << enc.output.size() << "\n";
 }
