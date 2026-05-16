@@ -37,5 +37,6 @@ Any image works. Kodak test images (kodim01 through kodim24) are what people usu
 
 - Sayood, *Introduction to Data Compression*
 - Weinberger, Seroussi, Sapiro — the LOCO-I / JPEG-LS paper
+- Witten/Neal/Cleary 1987 - "Arithmetic Coding for Data Compression" 
 - PNG filter spec
 - stb_image.h
