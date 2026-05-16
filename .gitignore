@@ -1,0 +1,32 @@
+# build artifacts
+build/
+*.o
+*.obj
+*.a
+*.so
+*.dylib
+
+# vendored dependencies
+deps/
+
+# runtime outputs
+*.csv
+histograms.png
+
+# test images
+kodim*.png
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# os
+.DS_Store
+Thumbs.db
+
+# ide
+.vscode/
+.idea/
+*.swp
