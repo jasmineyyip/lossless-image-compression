@@ -108,6 +108,67 @@ struct BitReader{
     }
 };
 
+struct RangeDecoder {
+    uint32_t low = 0;
+    uint32_t high = 0xFFFFFFFF;
+    uint32_t code = 0;
+    BitReader& reader;
+
+    explicit RangeDecoder(BitReader& r) : reader(r) {
+        for (int i = 0; i < 32; ++i) {
+            code = (code << 1) | reader.read_bit();
+        }
+    }
+
+    void renormalize() {
+        while (true) {
+            if (high < 0x80000000) {
+                // top bit determined as 0, no subtraction needed
+            } else if (low >= 0x80000000) {
+                code -= 0x80000000;
+                low  -= 0x80000000;
+                high -= 0x80000000;
+            } else if (low >= 0x40000000 && high < 0xC0000000) {
+                code -= 0x40000000;
+                low  -= 0x40000000;
+                high -= 0x40000000;
+            } else {
+                break;
+            }
+            low  <<= 1;
+            high = (high << 1) | 1;
+            code = (code << 1) | reader.read_bit();
+        }
+    }
+
+    uint32_t decode_symbol(const CDF& model) {
+        uint64_t range = static_cast<uint64_t>(high - low) + 1;
+        uint64_t scaled = ((static_cast<uint64_t>(code - low) + 1) * model.total - 1) / range;
+
+        // find symbol index using binary search
+        size_t symbol_index = 0;
+        size_t left = 0, right = model.table.size() - 1;
+        while (left < right) {
+            size_t mid = (left + right) / 2;
+            if (model.table[mid] > scaled) {
+                right = mid;
+            } else {
+                left = mid + 1;
+            }
+        }
+        symbol_index = left - 1;
+
+        uint32_t cdf_low = model.table[symbol_index];
+        uint32_t cdf_high = model.table[symbol_index + 1];
+
+        high = low + static_cast<uint32_t>((range * cdf_high) / model.total - 1);
+        low  = low + static_cast<uint32_t>((range * cdf_low) / model.total);
+
+        renormalize();
+        return symbol_index;
+    }
+};
+
 CDF build_model(const std::vector<long>& histogram) {
     // laplace smoothing
     std::vector<uint32_t> smoothed(histogram.size());

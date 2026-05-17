@@ -5,30 +5,25 @@ int main() {
     std::vector<long> histogram = {3, 5, 2};
     CDF model = build_model(histogram);
 
-    // test cdf
-    // std::cout << "total: " << model.total << "\n";
-    // std::cout << "cdf: ";
-    // for (uint32_t v : model.table) {
-    //     std::cout << v << " ";
-    // }
-    // std::cout << "\n";
+    std::vector<uint32_t> original = {0, 1, 2, 1, 0, 2, 1, 1, 0, 2, 2, 0, 1};
 
     RangeEncoder enc;
-    enc.encode_symbol(1, model);
-
-    // test encode symbol
-    std::cout << std::hex << std::uppercase
-              << "low  = 0x" << enc.low  << "\n"
-              << "high  = 0x" << enc.high  << "\n";
-
-    // test renormalization
-    for (int i = 0; i < 1000; ++i) {
-        uint32_t s = (i * 7) % 3;
-        enc.encode_symbol(s, model);
-    }
-    std::cout << "output bytes: " << std::dec << enc.output.size() << "\n";
-    
-    // test finalize
+    for (uint32_t s : original) enc.encode_symbol(s, model);
     enc.finalize();
-    std::cout << "output bytes: " << std::dec << enc.output.size() << "\n";
+    std::cout << "encoded " << original.size() << " symbols into "
+              << enc.output.size() << " bytes\n";
+
+    BitReader reader(enc.output);
+    RangeDecoder dec(reader);
+
+    bool ok = true;
+    for (size_t i = 0; i < original.size(); ++i) {
+        uint32_t got = dec.decode_symbol(model);
+        if (got != original[i]) {
+            std::cout << "MISMATCH at " << i
+                      << ": expected " << original[i] << ", got " << got << "\n";
+            ok = false;
+        }
+    }
+    std::cout << (ok ? "round-trip OK\n" : "round-trip FAILED\n");
 }
