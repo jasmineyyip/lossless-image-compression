@@ -91,6 +91,23 @@ struct RangeEncoder {
     }
 };
 
+struct BitReader{
+    const std::vector<uint8_t>& input;
+    size_t byte_pos = 0;
+    uint32_t bit_buffer = 0;
+    int bits_in_buffer = 0;
+
+    explicit BitReader(const std::vector<uint8_t>& data) : input(data) {}
+
+    uint32_t read_bit() {
+        if (bits_in_buffer == 0) {
+            bit_buffer = (byte_pos < input.size()) ? input[byte_pos++] : 0;
+            bits_in_buffer = 8;
+        }
+        return (bit_buffer >> --bits_in_buffer) & 1;
+    }
+};
+
 CDF build_model(const std::vector<long>& histogram) {
     // laplace smoothing
     std::vector<uint32_t> smoothed(histogram.size());
