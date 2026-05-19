@@ -1,65 +1,186 @@
-import Image from "next/image";
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+
+declare global {
+  interface Window {
+    Module: any;
+  }
+}
+
+type Stats = {
+  fileName: string;
+  width: number;
+  height: number;
+  pixels: number;
+  originalSize: number;
+  rawSize: number;
+  compressedSize: number;
+  bpp: number;
+  ratio: number;
+  elapsed: number;
+};
 
 export default function Home() {
+  const [ready, setReady] = useState(false);
+  const [stats, setStats] = useState<Stats | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState(false);
+  const moduleRef = useRef<any>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    // Pre-register the ready callback before loading codec.js,
+    // because Emscripten's generated code looks for window.Module on init.
+    window.Module = window.Module || {};
+    window.Module.onRuntimeInitialized = () => {
+      moduleRef.current = window.Module;
+      setReady(true);
+    };
+
+    const script = document.createElement("script");
+    script.src = "/codec.js";
+    script.async = true;
+    document.body.appendChild(script);
+
+    return () => {
+      try {
+        document.body.removeChild(script);
+      } catch {}
+    };
+  }, []);
+
+  async function handleFile(file: File) {
+    if (!moduleRef.current) return;
+    setError(null);
+
+    const Module = moduleRef.current;
+    const inputBytes = new Uint8Array(await file.arrayBuffer());
+
+    const start = performance.now();
+
+    const inputPtr = Module._malloc(inputBytes.length);
+    Module.HEAPU8.set(inputBytes, inputPtr);
+
+    const sizePtr = Module._malloc(4);
+
+    const outputPtr = Module.ccall(
+      "compress_image",
+      "number",
+      ["number", "number", "number"],
+      [inputPtr, inputBytes.length, sizePtr]
+    );
+
+    if (outputPtr === 0) {
+      Module._free(inputPtr);
+      Module._free(sizePtr);
+      setError("Failed to load image — not a supported format?");
+      return;
+    }
+
+    const outputSize = Module.HEAP32[sizePtr / 4];
+    const compressed = Module.HEAPU8.slice(outputPtr, outputPtr + outputSize);
+    const elapsed = performance.now() - start;
+
+    Module._free(inputPtr);
+    Module._free(sizePtr);
+    Module.ccall("free_buffer", null, ["number"], [outputPtr]);
+
+    const dv = new DataView(compressed.buffer);
+    const width = dv.getUint32(0, true);
+    const height = dv.getUint32(4, true);
+    const pixels = width * height;
+    const headerSize = 8 + 511 * 4;
+    const encodedSize = outputSize - headerSize;
+
+    setStats({
+      fileName: file.name,
+      width,
+      height,
+      pixels,
+      originalSize: inputBytes.length,
+      rawSize: pixels,
+      compressedSize: outputSize,
+      bpp: (encodedSize * 8) / pixels,
+      ratio: pixels / outputSize,
+      elapsed,
+    });
+  }
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
+    <main className="max-w-2xl mx-auto px-6 py-12">
+      <h1 className="text-3xl font-bold mb-2">Lossless Image Compression</h1>
+      <p className="text-gray-600 mb-8">
+        Paeth predictor + range coder, written in C++, running in your browser via WebAssembly.
+      </p>
+
+      <div
+        onClick={() => fileInputRef.current?.click()}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragOver(true);
+        }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragOver(false);
+          if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+        }}
+        className={`border-2 border-dashed rounded-lg p-16 text-center cursor-pointer transition ${
+          dragOver ? "border-blue-400 bg-blue-50" : "border-gray-300"
+        }`}
+      >
+        <p className="text-gray-600">
+          {ready ? "Drop an image here or click to select" : "Loading WASM..."}
+        </p>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={(e) => {
+            if (e.target.files?.length) handleFile(e.target.files[0]);
+          }}
         />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+      </div>
+
+      {error && (
+        <div className="mt-6 p-4 bg-red-50 text-red-700 rounded">{error}</div>
+      )}
+
+      {stats && (
+        <div className="mt-8 bg-gray-50 rounded-lg p-6">
+          <StatRow label="File" value={stats.fileName} />
+          <StatRow
+            label="Dimensions"
+            value={`${stats.width} × ${stats.height} (${stats.pixels.toLocaleString()} pixels)`}
+          />
+          <StatRow
+            label="Original (PNG)"
+            value={`${stats.originalSize.toLocaleString()} bytes`}
+          />
+          <StatRow
+            label="Raw grayscale"
+            value={`${stats.rawSize.toLocaleString()} bytes`}
+          />
+          <StatRow
+            label="Compressed (.bin)"
+            value={`${stats.compressedSize.toLocaleString()} bytes`}
+          />
+          <StatRow label="Bits per pixel" value={stats.bpp.toFixed(3)} />
+          <StatRow label="Ratio vs raw" value={`${stats.ratio.toFixed(2)}×`} />
+          <StatRow label="Encode time" value={`${stats.elapsed.toFixed(1)} ms`} />
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
+      )}
+    </main>
+  );
+}
+
+function StatRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex justify-between py-2 border-b border-gray-200 last:border-0">
+      <span className="text-gray-500">{label}</span>
+      <span className="font-mono font-semibold text-gray-400">{value}</span>
     </div>
   );
 }
