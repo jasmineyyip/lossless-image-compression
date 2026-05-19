@@ -1,42 +1,50 @@
-# Lossless Image Compression
+# lossless-image-compression
 
-Building a lossless image codec in C++ to figure out how lossless compression actually works under the hood. Plan is to start with prediction and entropy coding on grayscale, add context modeling, then color, then maybe video later.
+A lossless image codec written from scratch in C++. Compresses 8-bit grayscale images via Paeth prediction and a range coder, reaching within 0.02% of Shannon entropy on natural photos.
 
-## Set up
+[Live demo](https://lossless-image-compression.vercel.app/) — drop any image in, see it compressed in your browser via WebAssembly.
 
-You'll need a C++17 compiler, CMake, and Python (just for the histogram plot).
+## Usage
+
+Two command-line tools, `compress` and `decompress`, that round-trip a PNG through a custom `.bin` format:
 
 ```
-./fetch_deps.sh        # downloads stb_image.h
+./build/compress kodim01.png kodim01.bin    # 273,629 bytes (5.567 bpp)
+./build/decompress kodim01.bin kodim01.png  # verifies the decoded image matches the original exactly
+```
+
+The codec has two stages. First, a Paeth predictor (the same one PNG uses as filter type 4) replaces each pixel with its prediction error from three already-decoded neighbors — adjacent pixels in natural images are similar, so the residuals cluster tightly near zero. Then a bit-level range coder encodes those residuals against a single global probability model, hitting within hundredths of a bit per pixel of the Shannon limit on real photos.
+
+The `web/` directory contains the same codec compiled to WebAssembly with a small React UI on top.
+
+## Build
+
+C++17 compiler and CMake:
+
+```
+./fetch_deps.sh
 cmake -B build
 cmake --build build
-pip install matplotlib
 ```
 
-## What works so far
-
-`entropy_gap.cpp` runs Paeth prediction on a grayscale image and compares the Shannon entropy of the raw pixels against the residuals. The difference between those two numbers is roughly the compression headroom you'd get with a perfect entropy coder over those residuals.
+The web demo additionally needs Emscripten and Node:
 
 ```
-./build/entropy_gap kodim01.png
-python plot_histograms.py
+cd web
+./build.sh
+npm install
+npm run dev
 ```
 
-Any image works. Kodak test images (kodim01 through kodim24) are what people usually benchmark against, so I'm using those.
+## Status
 
-## Next steps
+Currently working: 8-bit grayscale, single global probability model, WASM build for the browser, round-trip verified on the Kodak image set.
 
-- range coder over the residuals so this actually produces a compressed file, and compare its size to PNG
-- context modeling with adaptive probability tables (LOCO-I style)
-- color images via YCoCg-R
-- proper file format with a header / magic bytes / version
-- benchmark against PNG, WebP-lossless, JPEG-LS
-- video, eventually
+Open: context-adaptive probability tables (~20% bpp improvement expected), color support via YCoCg-R, replacing the linear-scan symbol lookup with binary search.
 
 ## References
 
+- Witten, Neal, Cleary (1987), "Arithmetic coding for data compression"
+- Weinberger, Seroussi, Sapiro (2000), the LOCO-I / JPEG-LS paper
 - Sayood, *Introduction to Data Compression*
-- Weinberger, Seroussi, Sapiro — the LOCO-I / JPEG-LS paper
-- Witten/Neal/Cleary 1987 - "Arithmetic Coding for Data Compression" 
-- PNG filter spec
-- stb_image.h
+- PNG specification, filter chapter
