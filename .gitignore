@@ -29,4 +29,5 @@ Thumbs.db
 # ide
 .vscode/
 .idea/
-*.swp
+*.swpAGENTS.md
+CLAUDE.md

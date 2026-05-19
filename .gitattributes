@@ -1,4 +1,5 @@
-web/codec.js     linguist-generated=true
-web/codec.wasm   linguist-generated=true
-web/hello.js     linguist-generated=true
-web/hello.wasm   linguist-generated=true
+web/public/codec.js     linguist-generated=true
+web/public/codec.wasm   linguist-generated=true
+web/public/hello.js     linguist-generated=true
+web/public/hello.wasm   linguist-generated=true
+deps/**                 linguist-vendored=true
