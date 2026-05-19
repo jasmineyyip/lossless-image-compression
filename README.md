@@ -4,6 +4,8 @@ A lossless image codec written from scratch in C++. Compresses 8-bit grayscale i
 
 [Live demo](https://lossless-image-compression.vercel.app/) — drop any image in, see it compressed in your browser via WebAssembly.
 
+<img width="800" alt="Screenshot 2026-05-19 at 4 29 01 PM" src="https://github.com/user-attachments/assets/001318df-4d0d-4c64-a352-f3df1a859f42" />
+
 ## Usage
 
 Two command-line tools, `compress` and `decompress`, that round-trip a PNG through a custom `.bin` format:
