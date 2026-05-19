@@ -12,3 +12,7 @@ endif()
 add_executable(entropy_gap entropy_gap.cpp)
 target_include_directories(entropy_gap PRIVATE deps)
 target_compile_options(entropy_gap PRIVATE -Wall -Wextra -Wpedantic)
+
+add_executable(compress compress.cpp)
+target_include_directories(compress PRIVATE deps)
+target_compile_options(compress PRIVATE -Wall -Wextra -Wpedantic)
