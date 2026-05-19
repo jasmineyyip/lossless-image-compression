@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WASM Hello World</title>
+</head>
+<body>
+    <h1>WASM Hello World</h1>
+    <p id="result">Loading...</p>
+
+    <script src="hello.js"></script>
+    <script>
+        Module.onRuntimeInitialized = () => {
+            const add = Module.cwrap('add', 'number', ['number', 'number']);
+            const sum = add(2, 3);
+            document.getElementById('result').textContent = `2 + 3 = ${sum}`;
+        };
+    </script>
+</body>
+</html>
