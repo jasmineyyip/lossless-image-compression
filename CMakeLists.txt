@@ -16,3 +16,7 @@ target_compile_options(entropy_gap PRIVATE -Wall -Wextra -Wpedantic)
 add_executable(compress compress.cpp)
 target_include_directories(compress PRIVATE deps)
 target_compile_options(compress PRIVATE -Wall -Wextra -Wpedantic)
+
+add_executable(decompress decompress.cpp)
+target_include_directories(decompress PRIVATE deps)
+target_compile_options(decompress PRIVATE -Wall -Wextra -Wpedantic)
