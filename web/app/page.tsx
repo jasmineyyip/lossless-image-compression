@@ -3,8 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { IoIosCheckmarkCircleOutline } from "react-icons/io";
 import {
-  BarChart,
-  Bar,
+  AreaChart,
+  Area,
   XAxis,
   YAxis,
   Tooltip,
@@ -40,10 +40,7 @@ type Reconstructed = {
   numChannels: number;
 };
 
-type HistogramBin = {
-  residual: number;
-  count: number;
-};
+type HistogramBin = Record<string, number>;
 
 export default function Home() {
   const [ready, setReady] = useState(false);
@@ -169,27 +166,41 @@ export default function Home() {
     Module._free(numChannelsPtr);
     Module.ccall("free_buffer", null, ["number"], [reconstructedPtr]);
 
-    // Parse Y-channel histogram from compressed header.
+    // Parse all per-channel histograms from compressed header.
     // Layout: w(4) + h(4) + num_channels(4) + hist[0..numChannels-1]
     const dv = new DataView(compressed.buffer);
     const resOffset = numChannels === 1 ? 255 : 510;
     const histSize = 2 * resOffset + 1;
-    const histBins: HistogramBin[] = [];
-    const histByteOffset = 12; // skip w + h + num_channels
-    for (let i = 0; i < histSize; i++) {
-      const count = dv.getUint32(histByteOffset + i * 4, true);
-      histBins.push({ residual: i - resOffset, count });
+    const channelNames = numChannels === 1 ? ["Y"] : ["Y", "Co", "Cg"];
+
+    const histograms: number[][] = [];
+    let histByteOffset = 12;
+    for (let c = 0; c < numChannels; c++) {
+      const h: number[] = new Array(histSize);
+      for (let i = 0; i < histSize; i++) {
+        h[i] = dv.getUint32(histByteOffset, true);
+        histByteOffset += 4;
+      }
+      histograms.push(h);
     }
 
-    // Shannon entropy of Y-channel residual distribution.
-    const total = histBins.reduce((sum, b) => sum + b.count, 0);
+    // Shannon entropy from Y channel.
+    const yHist = histograms[0];
+    const total = yHist.reduce((sum, c) => sum + c, 0);
     let entropy = 0;
-    for (const bin of histBins) {
-      if (bin.count > 0) {
-        const p = bin.count / total;
+    for (const count of yHist) {
+      if (count > 0) {
+        const p = count / total;
         entropy -= p * Math.log2(p);
       }
     }
+
+    // Reshape into per-bin rows for Recharts.
+    const histBins: HistogramBin[] = Array.from({ length: histSize }, (_, i) => {
+      const row: HistogramBin = { residual: i - resOffset };
+      channelNames.forEach((name, c) => { row[name] = histograms[c][i]; });
+      return row;
+    });
 
     const pixels = width * height;
     const headerSize = 12 + numChannels * histSize * 4;
@@ -312,7 +323,7 @@ export default function Home() {
             few bits per pixel on the common values.
           </p>
           <ResponsiveContainer width="100%" height={260}>
-            <BarChart data={histogram} margin={{ top: 10, right: 10, bottom: 5, left: 0 }}>
+            <AreaChart data={histogram} margin={{ top: 10, right: 10, bottom: 5, left: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
               <XAxis
                 dataKey="residual"
@@ -320,7 +331,7 @@ export default function Home() {
                 domain={[-resOffset, resOffset]}
                 ticks={resOffset === 255
                   ? [-200, -100, 0, 100, 200]
-                  : [-400, -200, 0, 200, 400]}
+                  : [-500, -300, -100, 0, 100, 300, 500]}
                 tick={{ fontSize: 11, fill: "#6b7280" }}
                 label={{ value: "residual value", position: "insideBottom", offset: -2, fontSize: 11, fill: "#6b7280" }}
               />
@@ -340,8 +351,12 @@ export default function Home() {
                   return `Residual: ${numericLabel > 0 ? "+" : ""}${numericLabel}`;
                 }}
               />
-              <Bar dataKey="count" fill="#3b82f6" />
-            </BarChart>
+              <Area type="step" dataKey="Y"  stroke="#525252" fill="#525252" fillOpacity={0.5} />
+              {reconstructed?.numChannels === 3 && <>
+                <Area type="step" dataKey="Co" stroke="#f59e0b" fill="#f59e0b" fillOpacity={0.5} />
+                <Area type="step" dataKey="Cg" stroke="#10b981" fill="#10b981" fillOpacity={0.5} />
+              </>}
+            </AreaChart>
           </ResponsiveContainer>
         </div>
       )}
