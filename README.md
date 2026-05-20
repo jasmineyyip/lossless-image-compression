@@ -1,21 +1,21 @@
 # lossless-image-compression
 
-A lossless image codec written from scratch in C++. Compresses 8-bit grayscale images via Paeth prediction and a range coder, reaching within 0.02% of Shannon entropy on natural photos.
+A lossless image codec written in C++ from scratch. It compresses 8-bit grayscale and 24-bit RGB images using YCoCg-R decorrelation, Paeth prediction, and a range coder, reaching within hundredths of a bit per channel-pixel of the Shannon entropy of the prediction residuals.
 
-[Live demo](https://lossless-image-compression.vercel.app/) — drop any image in, see it compressed in your browser via WebAssembly.
-
-<img width="800" alt="Screenshot 2026-05-19 at 4 29 01 PM" src="https://github.com/user-attachments/assets/001318df-4d0d-4c64-a352-f3df1a859f42" />
+[Live demo](https://lossless-image-compression.vercel.app/) — You can drop any image in and see it compressed in your browser via WebAssembly.
 
 ## Usage
 
 Two command-line tools, `compress` and `decompress`, that round-trip a PNG through a custom `.bin` format:
 
 ```
-./build/compress kodim01.png kodim01.bin    # 273,629 bytes (5.567 bpp)
-./build/decompress kodim01.bin kodim01.png  # verifies the decoded image matches the original exactly
+./build/compress kodim01.png kodim01.bin    # 543,114 bytes (3.60 bits/channel-pixel, 2.17x raw)
+./build/decompress kodim01.bin kodim01.png  # verifies the decoded image matches the original byte-for-byte
 ```
 
-The codec has two stages. First, a Paeth predictor (the same one PNG uses as filter type 4) replaces each pixel with its prediction error from three already-decoded neighbors — adjacent pixels in natural images are similar, so the residuals cluster tightly near zero. Then a bit-level range coder encodes those residuals against a single global probability model, hitting within hundredths of a bit per pixel of the Shannon limit on real photos.
+Handles both grayscale and color PNGs automatically based on the source.
+
+The codec has three stages. For color images, a reversible YCoCg-R transform decorrelates RGB into one luma channel and two chroma channels. Note that chroma residuals on natural photos are dramatically more predictable than raw R, G, B, so the transform alone is worth most of the compression on color images. Next, a Paeth predictor replaces each pixel with its prediction error from three decoded neighbors. Finally, a bit-level range coder encodes those residuals against a probability model built from the histogram, hitting within hundredths of a bit per channel-pixel of the Shannon limit on real photos.
 
 The `web/` directory contains the same codec compiled to WebAssembly with a small React UI on top.
 
@@ -38,15 +38,15 @@ npm install
 npm run dev
 ```
 
-## Status
+## Project Status
 
-Currently working: 8-bit grayscale, single global probability model, WASM build for the browser, round-trip verified on the Kodak image set.
+Currently working: grayscale and 24-bit color, YCoCg-R for color decorrelation, single global probability model per channel, WASM build for the browser, round-trip verified on the Kodak image set.
 
-Open: context-adaptive probability tables (~20% bpp improvement expected), color support via YCoCg-R, replacing the linear-scan symbol lookup with binary search.
+Open: context-adaptive probability tables (~20% bpp improvement expected), replacing the linear-scan symbol lookup with binary search, larger predictor family (MED, GAP).
 
 ## References
 
 - Witten, Neal, Cleary (1987), "Arithmetic coding for data compression"
 - Weinberger, Seroussi, Sapiro (2000), the LOCO-I / JPEG-LS paper
-- Sayood, *Introduction to Data Compression*
+- Malvar, Sullivan (2003), "YCoCg-R: A color space with RGB reversibility and low dynamic range"
 - PNG specification, filter chapter
