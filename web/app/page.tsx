@@ -351,12 +351,13 @@ export default function Home() {
                   const numericLabel = typeof label === "number" ? label : Number(label);
                   return `Residual: ${numericLabel > 0 ? "+" : ""}${numericLabel}`;
                 }}
+                labelStyle={{ color: "#2a2a2a", fontSize: 15, paddingBottom: 2 }}
               />
-              <Legend />
-              <Area type="monotone" dataKey="Y"  stroke="#64748b" fill="#64748b" fillOpacity={0.45} />
+              <Legend wrapperStyle={{ fontSize: 14 }} />
+              <Area type="monotone" dataKey="Y"  stroke="#64748b" fill="#64748b" fillOpacity={0.3} />
               {numChannels === 3 && <>
                 <Area type="monotone" dataKey="Co" stroke="#f97316" fill="#f97316" fillOpacity={0.45} />
-                <Area type="monotone" dataKey="Cg" stroke="#14b8a6" fill="#14b8a6" fillOpacity={0.45} />
+                <Area type="monotone" dataKey="Cg" stroke="#14b8a6" fill="#14b8a6" fillOpacity={0.3} />
               </>}
             </AreaChart>
           </ResponsiveContainer>
