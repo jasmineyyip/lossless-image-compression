@@ -8,6 +8,7 @@ import {
   XAxis,
   YAxis,
   Tooltip,
+  Legend,
   ResponsiveContainer,
   CartesianGrid,
 } from "recharts";
@@ -138,7 +139,7 @@ export default function Home() {
     Module._free(sizePtr);
     Module.ccall("free_buffer", null, ["number"], [outputPtr]);
 
-    // Decompress to display + verify.
+    // decompress to display + verify
     const compressedPtr = Module._malloc(compressed.length);
     Module.HEAPU8.set(compressed, compressedPtr);
     const widthPtr = Module._malloc(4);
@@ -166,8 +167,8 @@ export default function Home() {
     Module._free(numChannelsPtr);
     Module.ccall("free_buffer", null, ["number"], [reconstructedPtr]);
 
-    // Parse all per-channel histograms from compressed header.
-    // Layout: w(4) + h(4) + num_channels(4) + hist[0..numChannels-1]
+    // parse all per-channel histograms from compressed header.
+    // layout: w(4) + h(4) + num_channels(4) + hist[0..numChannels-1]
     const dv = new DataView(compressed.buffer);
     const resOffset = numChannels === 1 ? 255 : 510;
     const histSize = 2 * resOffset + 1;
@@ -184,7 +185,7 @@ export default function Home() {
       histograms.push(h);
     }
 
-    // Shannon entropy from Y channel.
+    // shannon entropy from Y channel
     const yHist = histograms[0];
     const total = yHist.reduce((sum, c) => sum + c, 0);
     let entropy = 0;
@@ -195,12 +196,13 @@ export default function Home() {
       }
     }
 
-    // Reshape into per-bin rows for Recharts.
+    // reshape into per-bin rows for Recharts
+    const ZOOM = 100;
     const histBins: HistogramBin[] = Array.from({ length: histSize }, (_, i) => {
       const row: HistogramBin = { residual: i - resOffset };
       channelNames.forEach((name, c) => { row[name] = histograms[c][i]; });
       return row;
-    });
+    }).filter(row => Math.abs(row.residual) <= ZOOM);
 
     const pixels = width * height;
     const headerSize = 12 + numChannels * histSize * 4;
@@ -227,7 +229,7 @@ export default function Home() {
     setHistogram(histBins);
   }
 
-  const resOffset = reconstructed?.numChannels === 1 ? 255 : 510;
+  const numChannels = reconstructed?.numChannels ?? 1;
 
   return (
     <main className="max-w-4xl mx-auto px-6 py-12">
@@ -316,7 +318,9 @@ export default function Home() {
 
       {histogram && (
         <div className="mt-8 bg-gray-50 rounded-lg p-6">
-          <h3 className="text-base font-semibold mb-2 text-gray-900">Residual histogram (Y channel)</h3>
+          <h3 className="text-base font-semibold mb-2 text-gray-900">
+            Residual histogram
+          </h3>
           <p className="text-sm text-gray-500 mb-4">
             Distribution of prediction errors. The sharp peak at zero is the compression
             opportunity — concentrated probability means the range coder can spend very
@@ -328,10 +332,7 @@ export default function Home() {
               <XAxis
                 dataKey="residual"
                 type="number"
-                domain={[-resOffset, resOffset]}
-                ticks={resOffset === 255
-                  ? [-200, -100, 0, 100, 200]
-                  : [-500, -300, -100, 0, 100, 300, 500]}
+                ticks={[-100, -50, 0, 50, 100]}
                 tick={{ fontSize: 11, fill: "#6b7280" }}
                 label={{ value: "residual value", position: "insideBottom", offset: -2, fontSize: 11, fill: "#6b7280" }}
               />
@@ -351,10 +352,11 @@ export default function Home() {
                   return `Residual: ${numericLabel > 0 ? "+" : ""}${numericLabel}`;
                 }}
               />
-              <Area type="step" dataKey="Y"  stroke="#525252" fill="#525252" fillOpacity={0.5} />
-              {reconstructed?.numChannels === 3 && <>
-                <Area type="step" dataKey="Co" stroke="#f59e0b" fill="#f59e0b" fillOpacity={0.5} />
-                <Area type="step" dataKey="Cg" stroke="#10b981" fill="#10b981" fillOpacity={0.5} />
+              <Legend />
+              <Area type="monotone" dataKey="Y"  stroke="#64748b" fill="#64748b" fillOpacity={0.45} />
+              {numChannels === 3 && <>
+                <Area type="monotone" dataKey="Co" stroke="#f97316" fill="#f97316" fillOpacity={0.45} />
+                <Area type="monotone" dataKey="Cg" stroke="#14b8a6" fill="#14b8a6" fillOpacity={0.45} />
               </>}
             </AreaChart>
           </ResponsiveContainer>
