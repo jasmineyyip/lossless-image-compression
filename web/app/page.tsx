@@ -8,7 +8,6 @@ import {
   XAxis,
   YAxis,
   Tooltip,
-  Legend,
   ResponsiveContainer,
   CartesianGrid,
 } from "recharts";
@@ -341,11 +340,11 @@ export default function Home() {
                 tickFormatter={(v) => (v >= 1000 ? `${(v / 1000).toFixed(0)}k` : v)}
               />
               <Tooltip
-                formatter={(value) => {
+                formatter={(value, name) => {
                   if (typeof value === "number") {
-                    return [value.toLocaleString(), "count"];
+                    return [value.toLocaleString(), name];
                   }
-                  return [String(value ?? ""), "count"];
+                  return [String(value ?? ""), name];
                 }}
                 labelFormatter={(label) => {
                   const numericLabel = typeof label === "number" ? label : Number(label);
@@ -353,7 +352,6 @@ export default function Home() {
                 }}
                 labelStyle={{ color: "#2a2a2a", fontSize: 15, paddingBottom: 2 }}
               />
-              <Legend wrapperStyle={{ fontSize: 14 }} />
               <Area type="monotone" dataKey="Y"  stroke="#64748b" fill="#64748b" fillOpacity={0.3} />
               {numChannels === 3 && <>
                 <Area type="monotone" dataKey="Co" stroke="#f97316" fill="#f97316" fillOpacity={0.45} />
