@@ -103,12 +103,29 @@ export default function Home() {
     ctx.putImageData(imageData, 0, 0);
   }, [reconstructed]);
 
+  async function colorNormalize(file: File): Promise<Uint8Array> {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const i = new Image();
+      i.onload = () => resolve(i);
+      i.onerror = reject;
+      i.src = URL.createObjectURL(file);
+    });
+    const canvas = document.createElement("canvas");
+    canvas.width = img.naturalWidth;
+    canvas.height = img.naturalHeight;
+    canvas.getContext("2d")!.drawImage(img, 0, 0);
+    const blob = await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob(b => b ? resolve(b) : reject(new Error("toBlob failed")), "image/png");
+    });
+    return new Uint8Array(await blob.arrayBuffer());
+  }
+
   async function handleFile(file: File) {
     if (!moduleRef.current) return;
     setError(null);
 
     const Module = moduleRef.current;
-    const inputBytes = new Uint8Array(await file.arrayBuffer());
+    const inputBytes = await colorNormalize(file);
 
     const start = performance.now();
 
@@ -223,7 +240,7 @@ export default function Home() {
     });
 
     if (originalUrl) URL.revokeObjectURL(originalUrl);
-    setOriginalUrl(URL.createObjectURL(file));
+    setOriginalUrl(URL.createObjectURL(new Blob([new Uint8Array(inputBytes)], { type: "image/png" })));
     setReconstructed({ bytes: reconstructedBytes, width, height, numChannels });
     setHistogram(histBins);
   }
