@@ -23,6 +23,7 @@ type Stats = {
   width: number;
   height: number;
   pixels: number;
+  numChannels: number;
   originalSize: number;
   rawSize: number;
   compressedSize: number;
@@ -36,6 +37,7 @@ type Reconstructed = {
   bytes: Uint8Array;
   width: number;
   height: number;
+  numChannels: number;
 };
 
 type HistogramBin = {
@@ -76,21 +78,32 @@ export default function Home() {
 
   useEffect(() => {
     if (!reconstructed || !canvasRef.current) return;
-    const { bytes, width, height } = reconstructed;
+    const { bytes, width, height, numChannels } = reconstructed;
     const canvas = canvasRef.current;
     canvas.width = width;
     canvas.height = height;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    const rgba = new Uint8ClampedArray(width * height * 4);
-    for (let i = 0; i < bytes.length; i++) {
-      rgba[i * 4] = bytes[i];
-      rgba[i * 4 + 1] = bytes[i];
-      rgba[i * 4 + 2] = bytes[i];
-      rgba[i * 4 + 3] = 255;
+    const imageData = ctx.createImageData(width, height);
+    const rgba = imageData.data;
+
+    if (numChannels === 1) {
+      for (let i = 0; i < width * height; i++) {
+        rgba[i * 4 + 0] = bytes[i];
+        rgba[i * 4 + 1] = bytes[i];
+        rgba[i * 4 + 2] = bytes[i];
+        rgba[i * 4 + 3] = 255;
+      }
+    } else {
+      for (let i = 0; i < width * height; i++) {
+        rgba[i * 4 + 0] = bytes[i * 3 + 0];
+        rgba[i * 4 + 1] = bytes[i * 3 + 1];
+        rgba[i * 4 + 2] = bytes[i * 3 + 2];
+        rgba[i * 4 + 3] = 255;
+      }
     }
-    ctx.putImageData(new ImageData(rgba, width, height), 0, 0);
+    ctx.putImageData(imageData, 0, 0);
   }, [reconstructed]);
 
   async function handleFile(file: File) {
@@ -133,35 +146,42 @@ export default function Home() {
     Module.HEAPU8.set(compressed, compressedPtr);
     const widthPtr = Module._malloc(4);
     const heightPtr = Module._malloc(4);
+    const numChannelsPtr = Module._malloc(4);
 
     const reconstructedPtr = Module.ccall(
       "decompress_image",
       "number",
-      ["number", "number", "number", "number"],
-      [compressedPtr, compressed.length, widthPtr, heightPtr]
+      ["number", "number", "number", "number", "number"],
+      [compressedPtr, compressed.length, widthPtr, heightPtr, numChannelsPtr]
     );
 
     const width = Module.HEAP32[widthPtr / 4];
     const height = Module.HEAP32[heightPtr / 4];
+    const numChannels = Module.HEAP32[numChannelsPtr / 4];
     const reconstructedBytes = Module.HEAPU8.slice(
       reconstructedPtr,
-      reconstructedPtr + width * height
+      reconstructedPtr + width * height * numChannels
     );
 
     Module._free(compressedPtr);
     Module._free(widthPtr);
     Module._free(heightPtr);
+    Module._free(numChannelsPtr);
     Module.ccall("free_buffer", null, ["number"], [reconstructedPtr]);
 
-    // Parse histogram from compressed bytes header (bytes 8 onward).
+    // Parse Y-channel histogram from compressed header.
+    // Layout: w(4) + h(4) + num_channels(4) + hist[0..numChannels-1]
     const dv = new DataView(compressed.buffer);
+    const resOffset = numChannels === 1 ? 255 : 510;
+    const histSize = 2 * resOffset + 1;
     const histBins: HistogramBin[] = [];
-    for (let i = 0; i < 511; i++) {
-      const count = dv.getUint32(8 + i * 4, true);
-      histBins.push({ residual: i - 255, count });
+    const histByteOffset = 12; // skip w + h + num_channels
+    for (let i = 0; i < histSize; i++) {
+      const count = dv.getUint32(histByteOffset + i * 4, true);
+      histBins.push({ residual: i - resOffset, count });
     }
 
-    // Shannon entropy of the residual distribution.
+    // Shannon entropy of Y-channel residual distribution.
     const total = histBins.reduce((sum, b) => sum + b.count, 0);
     let entropy = 0;
     for (const bin of histBins) {
@@ -172,7 +192,7 @@ export default function Home() {
     }
 
     const pixels = width * height;
-    const headerSize = 8 + 511 * 4;
+    const headerSize = 12 + numChannels * histSize * 4;
     const encodedSize = outputSize - headerSize;
 
     setStats({
@@ -180,20 +200,23 @@ export default function Home() {
       width,
       height,
       pixels,
+      numChannels,
       originalSize: inputBytes.length,
-      rawSize: pixels,
+      rawSize: pixels * numChannels,
       compressedSize: outputSize,
-      bpp: (encodedSize * 8) / pixels,
-      ratio: pixels / outputSize,
+      bpp: (encodedSize * 8) / (pixels * numChannels),
+      ratio: (pixels * numChannels) / outputSize,
       elapsed,
       entropy,
     });
 
     if (originalUrl) URL.revokeObjectURL(originalUrl);
     setOriginalUrl(URL.createObjectURL(file));
-    setReconstructed({ bytes: reconstructedBytes, width, height });
+    setReconstructed({ bytes: reconstructedBytes, width, height, numChannels });
     setHistogram(histBins);
   }
+
+  const resOffset = reconstructed?.numChannels === 1 ? 255 : 510;
 
   return (
     <main className="max-w-4xl mx-auto px-6 py-12">
@@ -240,12 +263,11 @@ export default function Home() {
         <>
           <div className="mt-8 grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <p className="text-sm text-gray-500 mb-2">Original (rendered grayscale)</p>
+              <p className="text-sm text-gray-500 mb-2">Original</p>
               <img
                 src={originalUrl}
                 alt="Original"
                 className="w-full rounded border border-gray-200"
-                style={{ filter: "grayscale(100%)" }}
               />
             </div>
             <div>
@@ -269,13 +291,13 @@ export default function Home() {
           <StatRow label="File" value={stats.fileName} />
           <StatRow
             label="Dimensions"
-            value={`${stats.width} × ${stats.height} (${stats.pixels.toLocaleString()} pixels)`}
+            value={`${stats.width} × ${stats.height} (${stats.pixels.toLocaleString()} pixels, ${stats.numChannels}ch)`}
           />
           <StatRow label="Original (PNG)" value={`${stats.originalSize.toLocaleString()} bytes`} />
-          <StatRow label="Raw grayscale" value={`${stats.rawSize.toLocaleString()} bytes`} />
+          <StatRow label="Raw uncompressed" value={`${stats.rawSize.toLocaleString()} bytes`} />
           <StatRow label="Compressed (.bin)" value={`${stats.compressedSize.toLocaleString()} bytes`} />
-          <StatRow label="Residual entropy" value={`${stats.entropy.toFixed(3)} bits/pixel`} />
-          <StatRow label="Bits per pixel" value={stats.bpp.toFixed(3)} />
+          <StatRow label="Residual entropy (Y)" value={`${stats.entropy.toFixed(3)} bits/pixel`} />
+          <StatRow label="Bits/channel-pixel" value={stats.bpp.toFixed(3)} />
           <StatRow label="Ratio vs raw" value={`${stats.ratio.toFixed(2)}×`} />
           <StatRow label="Encode time" value={`${stats.elapsed.toFixed(1)} ms`} />
         </div>
@@ -283,7 +305,7 @@ export default function Home() {
 
       {histogram && (
         <div className="mt-8 bg-gray-50 rounded-lg p-6">
-          <h3 className="text-base font-semibold mb-2 text-gray-900">Residual histogram</h3>
+          <h3 className="text-base font-semibold mb-2 text-gray-900">Residual histogram (Y channel)</h3>
           <p className="text-sm text-gray-500 mb-4">
             Distribution of prediction errors. The sharp peak at zero is the compression
             opportunity — concentrated probability means the range coder can spend very
@@ -295,8 +317,10 @@ export default function Home() {
               <XAxis
                 dataKey="residual"
                 type="number"
-                domain={[-255, 255]}
-                ticks={[-200, -100, 0, 100, 200]}
+                domain={[-resOffset, resOffset]}
+                ticks={resOffset === 255
+                  ? [-200, -100, 0, 100, 200]
+                  : [-400, -200, 0, 200, 400]}
                 tick={{ fontSize: 11, fill: "#6b7280" }}
                 label={{ value: "residual value", position: "insideBottom", offset: -2, fontSize: 11, fill: "#6b7280" }}
               />
@@ -309,7 +333,6 @@ export default function Home() {
                   if (typeof value === "number") {
                     return [value.toLocaleString(), "count"];
                   }
-
                   return [String(value ?? ""), "count"];
                 }}
                 labelFormatter={(label) => {
