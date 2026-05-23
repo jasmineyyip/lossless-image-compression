@@ -190,13 +190,16 @@ export default function Home() {
     const histSize = 2 * resOffset + 1;
     const channelNames = numChannels === 1 ? ["Y"] : ["Y", "Co", "Cg"];
 
+    const NUM_CONTEXTS = 8;
     const histograms: number[][] = [];
     let histByteOffset = 12;
     for (let c = 0; c < numChannels; c++) {
-      const h: number[] = new Array(histSize);
-      for (let i = 0; i < histSize; i++) {
-        h[i] = dv.getUint32(histByteOffset, true);
-        histByteOffset += 4;
+      const h = new Array<number>(histSize).fill(0);
+      for (let k = 0; k < NUM_CONTEXTS; k++) {
+        for (let i = 0; i < histSize; i++) {
+          h[i] += dv.getUint32(histByteOffset, true);
+          histByteOffset += 4;
+        }
       }
       histograms.push(h);
     }
@@ -221,7 +224,7 @@ export default function Home() {
     }).filter(row => Math.abs(row.residual) <= ZOOM);
 
     const pixels = width * height;
-    const headerSize = 12 + numChannels * histSize * 4;
+    const headerSize = 12 + numChannels * NUM_CONTEXTS * histSize * 4;
     const encodedSize = outputSize - headerSize;
 
     setStats({

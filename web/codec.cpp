@@ -11,8 +11,19 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
+constexpr int NUM_CONTEXTS = 8;
+constexpr int CONTEXT_BOUNDARIES[NUM_CONTEXTS - 1] = {4, 12, 28, 60, 124, 252, 1024};
+
+inline int compute_context(int a, int b, int c) {
+    int activity = std::abs(a - c) + std::abs(b - c);
+    for (int i = 0; i < NUM_CONTEXTS - 1; ++i) {
+        if (activity < CONTEXT_BOUNDARIES[i]) return i;
+    }
+    return NUM_CONTEXTS - 1;
+}
+
 static int paeth(int a, int b, int c) {
-    int p  = a + b - c;
+    int p = a + b - c;
     int pa = std::abs(p - a);
     int pb = std::abs(p - b);
     int pc = std::abs(p - c);
@@ -25,7 +36,6 @@ extern "C" {
 
 EMSCRIPTEN_KEEPALIVE
 uint8_t* compress_image(const uint8_t* input_data, int input_size, int* output_size) {
-    // detect channel count without decoding
     int w, h, source_channels;
     if (!stbi_info_from_memory(input_data, input_size, &w, &h, &source_channels))
         return nullptr;
@@ -34,9 +44,9 @@ uint8_t* compress_image(const uint8_t* input_data, int input_size, int* output_s
     unsigned char* data = stbi_load_from_memory(input_data, input_size, &w, &h, nullptr, num_channels);
     if (!data) return nullptr;
 
-    const long n         = static_cast<long>(w) * h;
+    const long n = static_cast<long>(w) * h;
     const int RES_OFFSET = (num_channels == 1) ? 255 : 510;
-    const int HIST_SIZE  = 2 * RES_OFFSET + 1;
+    const int HIST_SIZE = 2 * RES_OFFSET + 1;
 
     // build per-channel int pixel planes, applying YCoCg-R for color
     std::vector<std::vector<int>> pixels(num_channels, std::vector<int>(n));
@@ -55,44 +65,54 @@ uint8_t* compress_image(const uint8_t* input_data, int input_size, int* output_s
     }
     stbi_image_free(data);
 
-    // Paeth-predict each channel and accumulate residuals + histogram
+    // pass 1: Paeth-predict, compute context, accumulate per-context histograms
     std::vector<std::vector<int16_t>> residuals(num_channels, std::vector<int16_t>(n));
-    std::vector<std::vector<long>>    hist(num_channels, std::vector<long>(HIST_SIZE, 0));
+    std::vector<std::vector<uint8_t>> contexts(num_channels, std::vector<uint8_t>(n));
+    std::vector<std::vector<std::vector<long>>> hist(
+        num_channels,
+        std::vector<std::vector<long>>(NUM_CONTEXTS, std::vector<long>(HIST_SIZE, 0))
+    );
 
     for (int c = 0; c < num_channels; ++c) {
         const auto& ch = pixels[c];
         for (int y = 0; y < h; ++y) {
             for (int x = 0; x < w; ++x) {
-                int idx   = y * w + x;
-                int a     = (x > 0)           ? ch[idx - 1]     : 0;
-                int b     = (y > 0)           ? ch[idx - w]     : 0;
+                int idx = y * w + x;
+                int a = (x > 0) ? ch[idx - 1] : 0;
+                int b = (y > 0) ? ch[idx - w] : 0;
                 int cdiag = (x > 0 && y > 0) ? ch[idx - w - 1] : 0;
-                int r     = ch[idx] - paeth(a, b, cdiag);
+
+                int r = ch[idx] - paeth(a, b, cdiag);
+                int ctx = compute_context(a, b, cdiag);
+
                 residuals[c][idx] = static_cast<int16_t>(r);
-                hist[c][r + RES_OFFSET]++;
+                contexts[c][idx] = static_cast<uint8_t>(ctx);
+                hist[c][ctx][r + RES_OFFSET]++;
             }
         }
     }
 
-    // build one CDF per channel
-    std::vector<CDF> models;
-    models.reserve(num_channels);
-    for (int c = 0; c < num_channels; ++c)
-        models.push_back(build_model(hist[c]));
+    // build NUM_CONTEXTS CDFs per channel
+    std::vector<std::vector<CDF>> models(num_channels);
+    for (int c = 0; c < num_channels; ++c) {
+        models[c].reserve(NUM_CONTEXTS);
+        for (int k = 0; k < NUM_CONTEXTS; ++k)
+            models[c].push_back(build_model(hist[c][k]));
+    }
 
-    // range-encode all channels into one stream (Y, Co, Cg order)
+    // pass 2: range-encode, switching CDF by context per pixel
     RangeEncoder enc;
     for (int c = 0; c < num_channels; ++c) {
         for (long i = 0; i < n; ++i) {
             uint32_t sym = static_cast<uint32_t>(residuals[c][i] + RES_OFFSET);
-            enc.encode_symbol(sym, models[c]);
+            enc.encode_symbol(sym, models[c][contexts[c][i]]);
         }
     }
     enc.finalize();
 
-    // allocate output: w + h + num_channels + histograms + encoded bytes
-    const long header_size = 4 + 4 + 4 + static_cast<long>(num_channels) * HIST_SIZE * 4;
-    const long total_size  = header_size + static_cast<long>(enc.output.size());
+    // allocate output: w + h + num_channels + per-channel per-context histograms + encoded bytes
+    const long header_size = 4 + 4 + 4 + static_cast<long>(num_channels) * NUM_CONTEXTS * HIST_SIZE * 4;
+    const long total_size = header_size + static_cast<long>(enc.output.size());
     uint8_t* result = static_cast<uint8_t*>(malloc(total_size));
     if (!result) return nullptr;
 
@@ -103,8 +123,9 @@ uint8_t* compress_image(const uint8_t* input_data, int input_size, int* output_s
     write_u32(static_cast<uint32_t>(h));
     write_u32(static_cast<uint32_t>(num_channels));
     for (int c = 0; c < num_channels; ++c)
-        for (long count : hist[c])
-            write_u32(static_cast<uint32_t>(count));
+        for (int k = 0; k < NUM_CONTEXTS; ++k)
+            for (long count : hist[c][k])
+                write_u32(static_cast<uint32_t>(count));
     memcpy(p, enc.output.data(), enc.output.size());
 
     *output_size = static_cast<int>(total_size);
@@ -122,41 +143,45 @@ uint8_t* decompress_image(const uint8_t* input_data, int input_size,
         return v;
     };
 
-    const uint32_t width       = read_u32();
-    const uint32_t height      = read_u32();
+    const uint32_t width = read_u32();
+    const uint32_t height = read_u32();
     const uint32_t num_channels = read_u32();
-    const long     n           = static_cast<long>(width) * height;
+    const long n = static_cast<long>(width) * height;
 
     const int RES_OFFSET = (num_channels == 1) ? 255 : 510;
-    const int HIST_SIZE  = 2 * RES_OFFSET + 1;
+    const int HIST_SIZE = 2 * RES_OFFSET + 1;
 
-    // read per-channel histograms and build CDFs
-    std::vector<CDF> models;
-    models.reserve(num_channels);
+    // read per-channel per-context histograms and build CDFs
+    std::vector<std::vector<CDF>> models(num_channels);
     for (uint32_t c = 0; c < num_channels; ++c) {
-        std::vector<long> hist(HIST_SIZE);
-        for (long& count : hist) count = read_u32();
-        models.push_back(build_model(hist));
+        models[c].reserve(NUM_CONTEXTS);
+        for (int k = 0; k < NUM_CONTEXTS; ++k) {
+            std::vector<long> hist(HIST_SIZE);
+            for (long& count : hist) count = read_u32();
+            models[c].push_back(build_model(hist));
+        }
     }
 
     std::vector<uint8_t> encoded(input_data + offset, input_data + input_size);
-    BitReader    reader(encoded);
+    BitReader reader(encoded);
     RangeDecoder dec(reader);
 
-    // decode: channel-outer, pixel-inner; Paeth reconstruct into int planes
+    // decode: channel-outer, pixel-inner; context recomputed from decoded neighbors
     std::vector<std::vector<int>> pixels(num_channels, std::vector<int>(n, 0));
 
     for (uint32_t c = 0; c < num_channels; ++c) {
         auto& ch = pixels[c];
         for (int y = 0; y < static_cast<int>(height); ++y) {
             for (int x = 0; x < static_cast<int>(width); ++x) {
-                int idx   = y * static_cast<int>(width) + x;
-                int a     = (x > 0)           ? ch[idx - 1]                         : 0;
-                int b     = (y > 0)           ? ch[idx - static_cast<int>(width)]     : 0;
+                int idx = y * static_cast<int>(width) + x;
+                int a = (x > 0) ? ch[idx - 1] : 0;
+                int b = (y > 0) ? ch[idx - static_cast<int>(width)] : 0;
                 int cdiag = (x > 0 && y > 0) ? ch[idx - static_cast<int>(width) - 1] : 0;
 
-                int residual = static_cast<int>(dec.decode_symbol(models[c])) - RES_OFFSET;
-                ch[idx] = paeth(a, b, cdiag) + residual;
+                int pred = paeth(a, b, cdiag);
+                int ctx = compute_context(a, b, cdiag);
+                int residual = static_cast<int>(dec.decode_symbol(models[c][ctx])) - RES_OFFSET;
+                ch[idx] = pred + residual;
             }
         }
     }
@@ -178,8 +203,8 @@ uint8_t* decompress_image(const uint8_t* input_data, int input_size,
         }
     }
 
-    *out_width        = static_cast<int>(width);
-    *out_height       = static_cast<int>(height);
+    *out_width = static_cast<int>(width);
+    *out_height = static_cast<int>(height);
     *out_num_channels = static_cast<int>(num_channels);
     return result;
 }
