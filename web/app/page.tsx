@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { IoIosCheckmarkCircleOutline } from "react-icons/io";
+import { IoIosCheckmarkCircleOutline, IoIosDownload } from "react-icons/io";
 import {
   AreaChart,
   Area,
@@ -42,6 +42,8 @@ type Reconstructed = {
 
 type HistogramBin = Record<string, number>;
 
+let codecScriptInjected = false;
+
 export default function Home() {
   const [ready, setReady] = useState(false);
   const [stats, setStats] = useState<Stats | null>(null);
@@ -50,27 +52,59 @@ export default function Home() {
   const [originalUrl, setOriginalUrl] = useState<string | null>(null);
   const [reconstructed, setReconstructed] = useState<Reconstructed | null>(null);
   const [histogram, setHistogram] = useState<HistogramBin[] | null>(null);
+  const [compressedBytes, setCompressedBytes] = useState<Uint8Array | null>(null);
   const moduleRef = useRef<any>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
+  function downloadBlob(blob: Blob, filename: string) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  const baseName = stats ? stats.fileName.replace(/\.[^.]+$/, "") : "image";
+
+  const handleDownloadBin = () => {
+    if (!compressedBytes) return;
+    downloadBlob(new Blob([new Uint8Array(compressedBytes)], { type: "application/octet-stream" }), `${baseName}.bin`);
+  };
+
+  const handleDownloadDecodedPng = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    canvas.toBlob((blob) => {
+      if (!blob) return;
+      downloadBlob(blob, `${baseName}_decoded.png`);
+    }, "image/png");
+  };
+
   useEffect(() => {
     window.Module = window.Module || {};
+
+    if (window.Module._malloc) {
+      moduleRef.current = window.Module;
+      setReady(true);
+      return;
+    }
+
     window.Module.onRuntimeInitialized = () => {
       moduleRef.current = window.Module;
       setReady(true);
     };
 
-    const script = document.createElement("script");
-    script.src = "/codec.js";
-    script.async = true;
-    document.body.appendChild(script);
-
-    return () => {
-      try {
-        document.body.removeChild(script);
-      } catch {}
-    };
+    if (!codecScriptInjected) {
+      codecScriptInjected = true;
+      const script = document.createElement("script");
+      script.src = "/codec.js";
+      script.async = true;
+      document.body.appendChild(script);
+    }
   }, []);
 
   useEffect(() => {
@@ -150,6 +184,7 @@ export default function Home() {
     const outputSize = Module.HEAP32[sizePtr / 4];
     const compressed = Module.HEAPU8.slice(outputPtr, outputPtr + outputSize);
     const elapsed = performance.now() - start;
+    setCompressedBytes(compressed);
 
     Module._free(inputPtr);
     Module._free(sizePtr);
@@ -311,9 +346,25 @@ export default function Home() {
             </div>
           </div>
 
-          <div className="mt-4 inline-flex items-center gap-2 px-3 py-1.5 bg-green-50 text-green-700 rounded text-sm font-medium">
-            <IoIosCheckmarkCircleOutline size={18} />
-            <span>Lossless reconstruction verified</span>
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-green-50 text-green-700 rounded text-sm font-medium">
+              <IoIosCheckmarkCircleOutline size={18} />
+              <span>Lossless reconstruction verified</span>
+            </div>
+            <button
+              onClick={handleDownloadBin}
+              className="inline-flex items-center gap-2 px-4 py-2 text-sm text-gray-600 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+            >
+              <IoIosDownload size={18} />
+              Download .bin
+            </button>
+            <button
+              onClick={handleDownloadDecodedPng}
+              className="inline-flex items-center gap-2 px-4 py-2 text-sm text-gray-600 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+            >
+              <IoIosDownload size={18} />
+              Download decoded PNG
+            </button>
           </div>
         </>
       )}
