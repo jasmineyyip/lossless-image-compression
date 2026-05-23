@@ -388,7 +388,7 @@ export default function Home() {
   return (
     <main className="max-w-4xl mx-auto px-6 py-12">
       <h1 className="text-3xl font-bold mb-2">Lossless Image Compression</h1>
-      <p className="text-gray-600 mb-8">
+      <p className="text-gray-400 mb-8">
         Paeth predictor + range coder, written in C++, running in your browser via WebAssembly.
       </p>
 
@@ -405,10 +405,10 @@ export default function Home() {
           if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
         }}
         className={`border-2 border-dashed rounded-lg p-16 text-center cursor-pointer transition ${
-          dragOver ? "border-blue-400 bg-blue-50" : "border-gray-300"
+          dragOver ? "border-blue-500 bg-blue-950/30" : "border-gray-700"
         }`}
       >
-        <p className="text-gray-600">
+        <p className="text-gray-400">
           {ready ? "Drop an image here or click to select" : "Loading WASM..."}
         </p>
         <input
@@ -430,7 +430,7 @@ export default function Home() {
         <>
           <div className="mt-8 grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <p className="text-sm text-gray-500 mb-2">Original</p>
+              <p className="text-sm text-gray-400 mb-2">Original</p>
               <img
                 src={originalUrl}
                 alt="Original"
@@ -438,10 +438,10 @@ export default function Home() {
               />
             </div>
             <div>
-              <p className="text-sm text-gray-500 mb-2">Decoded from .bin</p>
+              <p className="text-sm text-gray-400 mb-2">Decoded from .bin</p>
               <canvas
                 ref={canvasRef}
-                className="w-full rounded border border-gray-200"
+                className="w-full rounded border border-gray-700"
                 onMouseMove={handleCanvasHover}
                 onMouseLeave={() => setHoverInfo(null)}
               />
@@ -462,20 +462,20 @@ export default function Home() {
           </div>
 
           <div className="mt-4 flex flex-wrap items-center gap-3">
-            <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-green-50 text-green-700 rounded text-sm font-medium">
+            <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-gray-900 text-emerald-400 border border-gray-700 rounded text-sm font-medium">
               <IoIosCheckmarkCircleOutline size={18} />
               <span>Lossless reconstruction verified</span>
             </div>
             <button
               onClick={handleDownloadBin}
-              className="inline-flex items-center gap-2 px-4 py-2 text-sm text-gray-600 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+              className="inline-flex items-center gap-2 px-4 py-2 text-sm text-gray-300 bg-gray-900 border border-gray-700 rounded-lg hover:bg-gray-800 transition-colors"
             >
               <IoIosDownload size={18} />
               Download .bin
             </button>
             <button
               onClick={handleDownloadDecodedPng}
-              className="inline-flex items-center gap-2 px-4 py-2 text-sm text-gray-600 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+              className="inline-flex items-center gap-2 px-4 py-2 text-sm text-gray-300 bg-gray-900 border border-gray-700 rounded-lg hover:bg-gray-800 transition-colors"
             >
               <IoIosDownload size={18} />
               Download decoded PNG
@@ -486,6 +486,7 @@ export default function Home() {
 
       {stats && (
         <div className="mt-8 bg-gray-900 rounded-lg p-6 border border-gray-700">
+          <h3 className="text-base font-semibold mb-4 text-white">Compression stats</h3>
           <StatRow label="File" value={stats.fileName} />
           <StatRow
             label="Dimensions"
