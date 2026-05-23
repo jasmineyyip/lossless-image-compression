@@ -44,6 +44,25 @@ type HistogramBin = Record<string, number>;
 
 let codecScriptInjected = false;
 
+const CONTEXT_BOUNDARIES = [4, 12, 28, 60, 124, 252, 1024];
+
+function getLuma(bytes: Uint8Array, numChannels: number, idx: number): number {
+  if (numChannels === 1) return bytes[idx];
+  const r = bytes[idx * 3], g = bytes[idx * 3 + 1], b = bytes[idx * 3 + 2];
+  const co = r - b;
+  const t = b + (co >> 1);
+  const cg = g - t;
+  return t + (cg >> 1);
+}
+
+function paethPredictor(a: number, b: number, c: number): number {
+  const p = a + b - c;
+  const pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c);
+  if (pa <= pb && pa <= pc) return a;
+  if (pb <= pc) return b;
+  return c;
+}
+
 export default function Home() {
   const [ready, setReady] = useState(false);
   const [stats, setStats] = useState<Stats | null>(null);
@@ -53,9 +72,16 @@ export default function Home() {
   const [reconstructed, setReconstructed] = useState<Reconstructed | null>(null);
   const [histogram, setHistogram] = useState<HistogramBin[] | null>(null);
   const [compressedBytes, setCompressedBytes] = useState<Uint8Array | null>(null);
+  const [hoverInfo, setHoverInfo] = useState<{
+    mouseX: number; mouseY: number;
+    pixelX: number; pixelY: number;
+    luma: number; pred: number; residual: number;
+    activity: number; context: number;
+  } | null>(null);
   const moduleRef = useRef<any>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const residualCanvasRef = useRef<HTMLCanvasElement>(null);
 
   function downloadBlob(blob: Blob, filename: string) {
     const url = URL.createObjectURL(blob);
@@ -66,6 +92,31 @@ export default function Home() {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+  }
+
+  function handleCanvasHover(e: React.MouseEvent<HTMLCanvasElement>) {
+    if (!reconstructed) return;
+    const { bytes, width, height, numChannels } = reconstructed;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const px = Math.floor((e.clientX - rect.left) * (width / rect.width));
+    const py = Math.floor((e.clientY - rect.top) * (height / rect.height));
+    if (px < 0 || px >= width || py < 0 || py >= height) { setHoverInfo(null); return; }
+
+    const lumaAt = (x: number, y: number) =>
+      x < 0 || y < 0 || x >= width || y >= height ? 0 : getLuma(bytes, numChannels, y * width + x);
+
+    const a = lumaAt(px - 1, py);
+    const b = lumaAt(px, py - 1);
+    const c = lumaAt(px - 1, py - 1);
+    const luma = lumaAt(px, py);
+    const pred = paethPredictor(a, b, c);
+    const residual = luma - pred;
+    const activity = Math.abs(a - c) + Math.abs(b - c);
+    let context = 7;
+    for (let i = 0; i < CONTEXT_BOUNDARIES.length; i++) {
+      if (activity < CONTEXT_BOUNDARIES[i]) { context = i; break; }
+    }
+    setHoverInfo({ mouseX: e.clientX, mouseY: e.clientY, pixelX: px, pixelY: py, luma, pred, residual, activity, context });
   }
 
   const baseName = stats ? stats.fileName.replace(/\.[^.]+$/, "") : "image";
@@ -107,6 +158,47 @@ export default function Home() {
     }
   }, []);
 
+  function computeResidualHeatmap(
+    pixels: Uint8Array,
+    width: number,
+    height: number,
+    numChannels: number,
+    contrast = 4
+  ): ImageData {
+    const luma = new Int16Array(width * height);
+    if (numChannels === 1) {
+      for (let i = 0; i < luma.length; i++) luma[i] = pixels[i];
+    } else {
+      for (let i = 0; i < luma.length; i++) {
+        const r = pixels[i*3], g = pixels[i*3+1], b = pixels[i*3+2];
+        const co = r - b;
+        const t  = b + (co >> 1);
+        const cg = g - t;
+        luma[i]  = t + (cg >> 1);
+      }
+    }
+
+    const imageData = new ImageData(width, height);
+    const out = imageData.data;
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const idx = y * width + x;
+        const a = x > 0 ? luma[idx - 1] : 0;
+        const b = y > 0 ? luma[idx - width] : 0;
+        const c = (x > 0 && y > 0) ? luma[idx - width - 1] : 0;
+        const p = a + b - c;
+        const pred = (Math.abs(p - a) <= Math.abs(p - b) && Math.abs(p - a) <= Math.abs(p - c))
+          ? a : (Math.abs(p - b) <= Math.abs(p - c) ? b : c);
+        const v = Math.min(Math.abs(luma[idx] - pred) * contrast, 255);
+        out[idx*4    ] = v;
+        out[idx*4 + 1] = v;
+        out[idx*4 + 2] = v;
+        out[idx*4 + 3] = 255;
+      }
+    }
+    return imageData;
+  }
+
   useEffect(() => {
     if (!reconstructed || !canvasRef.current) return;
     const { bytes, width, height, numChannels } = reconstructed;
@@ -135,6 +227,14 @@ export default function Home() {
       }
     }
     ctx.putImageData(imageData, 0, 0);
+
+    const rc = residualCanvasRef.current;
+    if (rc) {
+      rc.width = width;
+      rc.height = height;
+      const rctx = rc.getContext("2d");
+      if (rctx) rctx.putImageData(computeResidualHeatmap(bytes, width, height, numChannels), 0, 0);
+    }
   }, [reconstructed]);
 
   async function colorNormalize(file: File): Promise<Uint8Array> {
@@ -342,8 +442,23 @@ export default function Home() {
               <canvas
                 ref={canvasRef}
                 className="w-full rounded border border-gray-200"
+                onMouseMove={handleCanvasHover}
+                onMouseLeave={() => setHoverInfo(null)}
               />
             </div>
+          </div>
+
+          <div className="mt-6 bg-gray-900 rounded-lg p-4 border border-gray-700">
+            <p className="text-sm text-gray-400 mb-3">Prediction error</p>
+            <canvas
+              ref={residualCanvasRef}
+              className="w-full rounded border border-gray-700"
+              onMouseMove={handleCanvasHover}
+              onMouseLeave={() => setHoverInfo(null)}
+            />
+            <p className="text-xs text-gray-500 mt-3 leading-relaxed">
+              Each pixel shows how far Paeth&apos;s prediction missed by — black means predicted perfectly, brighter pixels are harder to predict. Most of the image is near-black, which is why range coding the residuals against a tight distribution costs so few bits per pixel.
+            </p>
           </div>
 
           <div className="mt-4 flex flex-wrap items-center gap-3">
@@ -370,7 +485,7 @@ export default function Home() {
       )}
 
       {stats && (
-        <div className="mt-8 bg-gray-50 rounded-lg p-6">
+        <div className="mt-8 bg-gray-900 rounded-lg p-6 border border-gray-700">
           <StatRow label="File" value={stats.fileName} />
           <StatRow
             label="Dimensions"
@@ -387,30 +502,32 @@ export default function Home() {
       )}
 
       {histogram && (
-        <div className="mt-8 bg-gray-50 rounded-lg p-6">
-          <h3 className="text-base font-semibold mb-2 text-gray-900">
+        <div className="mt-8 bg-gray-900 rounded-lg p-6 border border-gray-700">
+          <h3 className="text-base font-semibold mb-2 text-white">
             Residual histogram
           </h3>
-          <p className="text-sm text-gray-500 mb-4">
+          <p className="text-sm text-gray-400 mb-4">
             Distribution of prediction errors. The sharp peak at zero is the compression
             opportunity — concentrated probability means the range coder can spend very
             few bits per pixel on the common values.
           </p>
           <ResponsiveContainer width="100%" height={260}>
             <AreaChart data={histogram} margin={{ top: 10, right: 10, bottom: 5, left: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+              <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
               <XAxis
                 dataKey="residual"
                 type="number"
                 ticks={[-100, -50, 0, 50, 100]}
-                tick={{ fontSize: 11, fill: "#6b7280" }}
-                label={{ value: "residual value", position: "insideBottom", offset: -2, fontSize: 11, fill: "#6b7280" }}
+                tick={{ fontSize: 11, fill: "#9ca3af" }}
+                label={{ value: "residual value", position: "insideBottom", offset: -2, fontSize: 11, fill: "#9ca3af" }}
               />
               <YAxis
-                tick={{ fontSize: 11, fill: "#6b7280" }}
+                tick={{ fontSize: 11, fill: "#9ca3af" }}
                 tickFormatter={(v) => (v >= 1000 ? `${(v / 1000).toFixed(0)}k` : v)}
               />
               <Tooltip
+                contentStyle={{ backgroundColor: "#111827", border: "1px solid #374151", borderRadius: "0.5rem" }}
+                itemStyle={{ color: "#f9fafb" }}
                 formatter={(value, name) => {
                   if (typeof value === "number") {
                     return [value.toLocaleString(), name];
@@ -421,7 +538,7 @@ export default function Home() {
                   const numericLabel = typeof label === "number" ? label : Number(label);
                   return `Residual: ${numericLabel > 0 ? "+" : ""}${numericLabel}`;
                 }}
-                labelStyle={{ color: "#2a2a2a", fontSize: 15, paddingBottom: 2 }}
+                labelStyle={{ color: "#9ca3af", fontSize: 12, paddingBottom: 2 }}
               />
               <Area type="monotone" dataKey="Y"  stroke="#64748b" fill="#64748b" fillOpacity={0.3} />
               {numChannels === 3 && <>
@@ -432,15 +549,54 @@ export default function Home() {
           </ResponsiveContainer>
         </div>
       )}
+      {hoverInfo && (
+        <div
+          className="fixed z-50 pointer-events-none bg-gray-900/95 text-white text-xs rounded-lg px-3 py-2.5 shadow-xl border border-gray-700"
+          style={{ left: hoverInfo.mouseX + 16, top: hoverInfo.mouseY + 16 }}
+        >
+          <div className="text-gray-400 font-mono mb-1.5">
+            ({hoverInfo.pixelX}, {hoverInfo.pixelY})
+          </div>
+          <div className="font-mono space-y-1">
+            <div className="flex justify-between gap-6">
+              <span className="text-gray-400">luma</span>
+              <span>{hoverInfo.luma}</span>
+            </div>
+            <div className="flex justify-between gap-6">
+              <span className="text-gray-400">predicted</span>
+              <span>{hoverInfo.pred}</span>
+            </div>
+            <div className="flex justify-between gap-6">
+              <span className="text-gray-400">residual</span>
+              <span className={
+                hoverInfo.residual === 0 ? "text-emerald-400" :
+                Math.abs(hoverInfo.residual) <= 8 ? "text-amber-400" : "text-red-400"
+              }>
+                {hoverInfo.residual > 0 ? "+" : ""}{hoverInfo.residual}
+              </span>
+            </div>
+            <div className="border-t border-gray-700 pt-1 mt-1 space-y-1">
+              <div className="flex justify-between gap-6">
+                <span className="text-gray-400">activity</span>
+                <span>{hoverInfo.activity}</span>
+              </div>
+              <div className="flex justify-between gap-6">
+                <span className="text-gray-400">context</span>
+                <span>{hoverInfo.context} / 7</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
 
 function StatRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex justify-between py-2 border-b border-gray-200 last:border-0">
-      <span className="text-gray-500">{label}</span>
-      <span className="font-mono font-semibold text-gray-400">{value}</span>
+    <div className="flex justify-between py-2 border-b border-gray-700 last:border-0">
+      <span className="text-gray-400">{label}</span>
+      <span className="font-mono font-semibold text-white">{value}</span>
     </div>
   );
 }
