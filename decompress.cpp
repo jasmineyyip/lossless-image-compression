@@ -11,6 +11,18 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
+constexpr int NUM_CONTEXTS = 8;
+constexpr int CONTEXT_BOUNDARIES[NUM_CONTEXTS - 1] = {4, 12, 28, 60, 124, 252, 1024};
+
+// find which context the pixel is in
+inline int compute_context(int a, int b, int c) {
+    int activity = std::abs(a - c) + std::abs(b - c);
+    for (int i = 0; i < NUM_CONTEXTS - 1; ++i) {
+        if (activity < CONTEXT_BOUNDARIES[i]) return i;
+    }
+    return NUM_CONTEXTS - 1;
+}
+
 static int paeth(int a, int b, int c) {
     int p = a + b - c;
     int pa = std::abs(p - a);
@@ -49,13 +61,15 @@ int main(int argc, char* argv[]) {
     const int RES_OFFSET = (num_channels == 1) ? 255 : 510;
     const int HIST_SIZE = 2 * RES_OFFSET + 1;
 
-    // read per-channel histograms and build CDFs
-    std::vector<CDF> models;
-    models.reserve(num_channels);
+    // read per-channel per-context histograms and build CDFs
+    std::vector<std::vector<CDF>> models(num_channels);
     for (uint32_t c = 0; c < num_channels; ++c) {
-        std::vector<long> hist(HIST_SIZE);
-        for (long& count : hist) count = read_u32();
-        models.push_back(build_model(hist));
+        models[c].reserve(NUM_CONTEXTS);
+        for (int k = 0; k < NUM_CONTEXTS; ++k) {
+            std::vector<long> hist(HIST_SIZE);
+            for (long& count : hist) count = read_u32();
+            models[c].push_back(build_model(hist));
+        }
     }
 
     // slurp remaining bytes for the range decoder
@@ -65,7 +79,7 @@ int main(int argc, char* argv[]) {
     BitReader reader(encoded);
     RangeDecoder dec(reader);
 
-    // decode: channel-outer, pixel-inner; reconstruct Paeth in-place
+    // decode: channel-outer, pixel-inner; context recomputed from decoded neighbors
     std::vector<std::vector<int>> pixels(num_channels, std::vector<int>(n, 0));
 
     for (uint32_t c = 0; c < num_channels; ++c) {
@@ -77,9 +91,10 @@ int main(int argc, char* argv[]) {
                 int b = (y > 0) ? ch[idx - static_cast<int>(width)] : 0;
                 int cdiag = (x > 0 && y > 0) ? ch[idx - static_cast<int>(width) - 1] : 0;
 
-                uint32_t sym = dec.decode_symbol(models[c]);
-                int residual = static_cast<int>(sym) - RES_OFFSET;
-                ch[idx] = paeth(a, b, cdiag) + residual;
+                int pred = paeth(a, b, cdiag);
+                int ctx = compute_context(a, b, cdiag);
+                int residual = static_cast<int>(dec.decode_symbol(models[c][ctx])) - RES_OFFSET;
+                ch[idx] = pred + residual;
             }
         }
     }
