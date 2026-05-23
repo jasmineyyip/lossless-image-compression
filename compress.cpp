@@ -10,6 +10,17 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
+constexpr int NUM_CONTEXTS = 8;
+constexpr int CONTEXT_BOUNDARIES[NUM_CONTEXTS - 1] = {4, 12, 28, 60, 124, 252, 1024};
+
+inline int compute_context(int a, int b, int c) {
+    int activity = std::abs(a - c) + std::abs(b - c);
+    for (int i = 0; i < NUM_CONTEXTS - 1; ++i) {
+        if (activity < CONTEXT_BOUNDARIES[i]) return i;
+    }
+    return NUM_CONTEXTS - 1;
+}
+
 static int paeth(int a, int b, int c) {
     int p  = a + b - c;
     int pa = std::abs(p - a);
@@ -25,7 +36,7 @@ int main(int argc, char* argv[]) {
         std::cerr << "Usage: " << argv[0] << " <input.png> <output.bin>\n";
         return 1;
     }
-    const char* input_path = argv[1];
+    const char* input_path  = argv[1];
     const char* output_path = argv[2];
 
     // detect channel count without decoding the image
@@ -46,7 +57,7 @@ int main(int argc, char* argv[]) {
 
     const long n = static_cast<long>(w) * h;
     const int RES_OFFSET = (num_channels == 1) ? 255 : 510;
-    const int HIST_SIZE  = 2 * RES_OFFSET + 1;
+    const int HIST_SIZE = 2 * RES_OFFSET + 1;
 
     // build per-channel int pixel planes, applying YCoCg-R for color
     std::vector<std::vector<int>> pixels(num_channels, std::vector<int>(n));
@@ -65,42 +76,52 @@ int main(int argc, char* argv[]) {
     }
     stbi_image_free(data);
 
-    // predict each channel and accumulate residuals and histogram
+    // paeth predict, compute context, accumulate histograms per context
     std::vector<std::vector<int16_t>> residuals(num_channels, std::vector<int16_t>(n));
-    std::vector<std::vector<long>> hist(num_channels, std::vector<long>(HIST_SIZE, 0));
+    std::vector<std::vector<uint8_t>> contexts(num_channels, std::vector<uint8_t>(n));
+    std::vector<std::vector<std::vector<long>>> hist(
+        num_channels,
+        std::vector<std::vector<long>>(NUM_CONTEXTS, std::vector<long>(HIST_SIZE, 0))
+    );
 
     for (int c = 0; c < num_channels; ++c) {
         const auto& ch = pixels[c];
         for (int y = 0; y < h; ++y) {
             for (int x = 0; x < w; ++x) {
-                int idx  = y * w + x;
+                int idx   = y * w + x;
                 int a = (x > 0) ? ch[idx - 1] : 0;
                 int b = (y > 0) ? ch[idx - w] : 0;
-                int cdiag= (x > 0 && y > 0) ? ch[idx - w - 1] : 0;
+                int cdiag = (x > 0 && y > 0) ? ch[idx - w - 1] : 0;
+
                 int r = ch[idx] - paeth(a, b, cdiag);
+                int ctx = compute_context(a, b, cdiag);
+
                 residuals[c][idx] = static_cast<int16_t>(r);
-                hist[c][r + RES_OFFSET]++;
+                contexts[c][idx]  = static_cast<uint8_t>(ctx);
+                hist[c][ctx][r + RES_OFFSET]++;
             }
         }
     }
 
-    // build one CDF per channel
-    std::vector<CDF> models;
-    models.reserve(num_channels);
-    for (int c = 0; c < num_channels; ++c)
-        models.push_back(build_model(hist[c]));
+    // build NUM_CONTEXTS CDFs per channel
+    std::vector<std::vector<CDF>> models(num_channels);
+    for (int c = 0; c < num_channels; ++c) {
+        models[c].reserve(NUM_CONTEXTS);
+        for (int k = 0; k < NUM_CONTEXTS; ++k)
+            models[c].push_back(build_model(hist[c][k]));
+    }
 
-    // range-encode all channels into one stream (Y, Co, Cg)
+    // range-encode, switching CDF by context per pixel
     RangeEncoder enc;
     for (int c = 0; c < num_channels; ++c) {
         for (long i = 0; i < n; ++i) {
             uint32_t sym = static_cast<uint32_t>(residuals[c][i] + RES_OFFSET);
-            enc.encode_symbol(sym, models[c]);
+            enc.encode_symbol(sym, models[c][contexts[c][i]]);
         }
     }
     enc.finalize();
 
-    // write file: width, height, num_channels, per-channel histograms, encoded bytes
+    // write file: width, height, num_channels, per-channel per-context histograms, encoded bytes
     std::ofstream out(output_path, std::ios::binary);
     if (!out) {
         std::cerr << "Failed to open output file: " << output_path << "\n";
@@ -114,8 +135,9 @@ int main(int argc, char* argv[]) {
     write_u32(static_cast<uint32_t>(h));
     write_u32(static_cast<uint32_t>(num_channels));
     for (int c = 0; c < num_channels; ++c)
-        for (long count : hist[c])
-            write_u32(static_cast<uint32_t>(count));
+        for (int k = 0; k < NUM_CONTEXTS; ++k)
+            for (long count : hist[c][k])
+                write_u32(static_cast<uint32_t>(count));
     out.write(reinterpret_cast<const char*>(enc.output.data()), enc.output.size());
 
     // stats
